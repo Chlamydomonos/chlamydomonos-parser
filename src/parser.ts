@@ -107,6 +107,7 @@ class ParserImpl<
         private typeKey: TypeKey,
         private tokenTypes: EnumOf<Tokens[TypeKey]>,
         private rootNode: RootKey,
+        private debug: boolean,
         grammarFactory: (
             grammarBuilder: GrammarBuilderOf<TypeKey, Tokens, Nodes>,
             customRuleBuilder: CustomRuleBuilder<TypeKey, Tokens, Nodes>,
@@ -200,47 +201,122 @@ class ParserImpl<
         }
 
         const self = this;
+        const debug = this.debug;
+
+        // 将类型编号转为可读名称（优先从 tokenTypes 枚举反查）
+        const typeName = (t: number): string => {
+            const name = (self.tokenTypes as any)[t];
+            return name !== undefined ? `${name}(${t})` : `type(${t})`;
+        };
+
+        // 用于控制台输出的缩进深度（随解析调用栈增减）
+        let depth = 0;
+        const indent = () => '  '.repeat(depth);
+
+        if (debug) {
+            const tokenSummary = tokenStream.map((t, i) => `[${i}]${typeName((t as any)[self.typeKey])}`).join(' ');
+            console.log(
+                `[parseTokenStream] 开始解析，根节点=${typeName(this.rootNode)}，共 ${tokenStream.length} 个 token：${tokenSummary}`,
+            );
+        }
 
         // 生成器：枚举所有能从 start 位置成功解析 target 节点的结果
         function* parseNode(target: number, start: number): Generator<{ node: any; next: number }> {
+            if (debug) {
+                console.log(`${indent()}[parseNode] 尝试解析 ${typeName(target)}，start=${start}`);
+            }
+            depth++;
+
             // 先尝试自定义规则（customRuleMap 中的 factory 返回 { node, next }，节点本身不带 typeKey）
             for (const rule of self.customRuleMap[target] ?? []) {
+                if (debug) {
+                    console.log(`${indent()}[customRule] 尝试 target=${typeName(target)} 的自定义规则`);
+                }
                 try {
                     const result = rule.factory(tokenStream, start);
                     result.node[self.typeKey] = rule.target;
+                    if (debug) {
+                        console.log(`${indent()}[customRule] 成功，next=${result.next}`);
+                    }
                     yield result;
                 } catch {
+                    if (debug) {
+                        console.log(`${indent()}[customRule] 失败，继续尝试下一条`);
+                    }
                     // 该自定义规则不匹配，继续尝试下一条
                 }
             }
 
             // 再尝试普通文法规则
-            if (start >= tokenStream.length) return;
+            if (start >= tokenStream.length) {
+                if (debug) {
+                    console.log(`${indent()}[parseNode] start=${start} 已到达 token 流末尾，停止`);
+                }
+                depth--;
+                return;
+            }
 
             const firstTokenType = (tokenStream[start] as any)[self.typeKey] as number;
             const candidates = self.grammarMap[target]?.[firstTokenType] ?? [];
 
+            if (debug) {
+                console.log(
+                    `${indent()}[parseNode] 当前 token=${typeName(firstTokenType)}，找到 ${candidates.length} 条候选规则`,
+                );
+            }
+
             for (const rule of candidates) {
                 yield* parseRule(rule, start);
             }
+
+            depth--;
         }
 
         // 生成器：枚举应用某条文法规则时所有可能的解析结果
         function* parseRule(rule: GrammarItemInner, start: number): Generator<{ node: any; next: number }> {
+            if (debug) {
+                const srcStr = rule.source.map(typeName).join(' ');
+                console.log(`${indent()}[parseRule] 尝试规则：${typeName(rule.target)} -> ${srcStr}，start=${start}`);
+            }
+            depth++;
+
             // 递归地逐个匹配 source 中的每个元素，收集 children
             function* step(i: number, pos: number, children: any[]): Generator<{ node: any; next: number }> {
                 if (i === rule.source.length) {
                     // grammar.ts 中的 factory 已自动为节点设置 typeKey
-                    yield { node: rule.factory(...children), next: pos };
+                    const node = rule.factory(...children);
+                    if (debug) {
+                        console.log(
+                            `${indent()}[parseRule] 规则 ${typeName(rule.target)} 匹配成功，范围=[${start}, ${pos})`,
+                        );
+                    }
+                    yield { node, next: pos };
                     return;
                 }
 
                 const srcType = rule.source[i];
                 if (tokenSet.has(srcType)) {
                     // 匹配一个 token
-                    if (pos >= tokenStream.length) return;
+                    if (pos >= tokenStream.length) {
+                        if (debug) {
+                            console.log(
+                                `${indent()}[step] 期望 token ${typeName(srcType)}（第 ${i} 项），但已到达流末尾`,
+                            );
+                        }
+                        return;
+                    }
                     const tok = tokenStream[pos] as any;
-                    if (tok[self.typeKey] !== srcType) return;
+                    if (tok[self.typeKey] !== srcType) {
+                        if (debug) {
+                            console.log(
+                                `${indent()}[step] 期望 token ${typeName(srcType)}（第 ${i} 项），实际为 ${typeName(tok[self.typeKey])}，不匹配`,
+                            );
+                        }
+                        return;
+                    }
+                    if (debug) {
+                        console.log(`${indent()}[step] token ${typeName(srcType)} 在 pos=${pos} 匹配成功`);
+                    }
                     yield* step(i + 1, pos + 1, [...children, tok]);
                 } else {
                     // 递归解析一个子节点，对每种可能的解析结果继续尝试后续元素
@@ -251,11 +327,15 @@ class ParserImpl<
             }
 
             yield* step(0, start, []);
+            depth--;
         }
 
         // 取第一个消费了全部 token 的解析结果作为根节点
         for (const result of parseNode(this.rootNode, 0)) {
             if (result.next === tokenStream.length) {
+                if (debug) {
+                    console.log(`[parseTokenStream] 解析成功，消耗全部 ${tokenStream.length} 个 token`);
+                }
                 return result.node;
             }
         }
@@ -278,7 +358,7 @@ type KeyOverlap = {
 type HasOverlap<T extends number, U extends number> = [Extract<`${T}`, `${U}`>] extends [never] ? false : true;
 
 export const createParser =
-    <TypeKey extends string>(typeKey: TypeKey) =>
+    <TypeKey extends string>(typeKey: TypeKey, debug: boolean = false) =>
     <Tokens extends { [key in TypeKey]: number }, Nodes extends { [key in TypeKey]: number }>(
         ..._: HasOverlap<Tokens[TypeKey], Nodes[TypeKey]> extends true ? [KeyOverlap] : []
     ) =>
@@ -293,4 +373,4 @@ export const createParser =
             customRules: CustomRule<TypeKey, Tokens, Nodes, Nodes[TypeKey]>[];
         },
     ): Parser<TypeKey, Tokens, Nodes, RootKey> =>
-        new ParserImpl<TypeKey, Tokens, Nodes, RootKey>(typeKey, tokenTypes, rootNode, grammarFactory);
+        new ParserImpl<TypeKey, Tokens, Nodes, RootKey>(typeKey, tokenTypes, rootNode, debug, grammarFactory);

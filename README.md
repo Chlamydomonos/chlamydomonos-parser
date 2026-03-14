@@ -1,0 +1,3 @@
+# Chlamydomonos-Parser
+
+使用Typescript实现的语法分析器库。通过带有回溯的递归下降算法处理不包含左递归的文法。

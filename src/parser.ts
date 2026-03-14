@@ -266,7 +266,7 @@ type KeyOverlap = {
     [KEY_OVERLAP]: true;
 };
 
-type HasOverlap<T, U> = [Extract<T, U>] extends [never] ? false : true;
+type HasOverlap<T extends number, U extends number> = [Extract<`${T}`, `${U}`>] extends [never] ? false : true;
 
 export const createParser =
     <TypeKey extends string>(typeKey: TypeKey) =>

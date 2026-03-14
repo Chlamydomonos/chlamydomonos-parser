@@ -79,12 +79,21 @@ type EnumOf<T extends number> = {
     [key: number]: string;
 };
 
-class Parser<
+export interface Parser<
     TypeKey extends string,
     Tokens extends { [key in TypeKey]: number },
     Nodes extends { [key in TypeKey]: number },
     RootKey extends Nodes[TypeKey],
 > {
+    parse(tokenStream: Tokens[]): Extract<ExpandByKey<Nodes, TypeKey>, { [key in TypeKey]: RootKey }>;
+}
+
+class ParserImpl<
+    TypeKey extends string,
+    Tokens extends { [key in TypeKey]: number },
+    Nodes extends { [key in TypeKey]: number },
+    RootKey extends Nodes[TypeKey],
+> implements Parser<TypeKey, Tokens, Nodes, RootKey> {
     private grammar: GrammarItemInner[];
     private customRules: CustomRuleInner[];
 
@@ -283,5 +292,5 @@ export const createParser =
             grammar: BaseGrammarItem<TypeKey, Tokens, Nodes>[] & GrammarMeta<TypeKey>;
             customRules: CustomRule<TypeKey, Tokens, Nodes, Nodes[TypeKey]>[];
         },
-    ) =>
-        new Parser<TypeKey, Tokens, Nodes, RootKey>(typeKey, tokenTypes, rootNode, grammarFactory);
+    ): Parser<TypeKey, Tokens, Nodes, RootKey> =>
+        new ParserImpl<TypeKey, Tokens, Nodes, RootKey>(typeKey, tokenTypes, rootNode, grammarFactory);

@@ -106,6 +106,7 @@ class ParserImpl<
     constructor(
         private typeKey: TypeKey,
         private tokenTypes: EnumOf<Tokens[TypeKey]>,
+        private nodeTypes: EnumOf<Nodes[TypeKey]> | undefined,
         private rootNode: RootKey,
         private debug: boolean,
         grammarFactory: (
@@ -205,8 +206,19 @@ class ParserImpl<
 
         // 将类型编号转为可读名称（优先从 tokenTypes 枚举反查）
         const typeName = (t: number): string => {
-            const name = (self.tokenTypes as any)[t];
-            return name !== undefined ? `${name}(${t})` : `type(${t})`;
+            const tokenName = (self.tokenTypes as any)[t];
+            if (tokenName) {
+                return `token(${tokenName})`;
+            }
+
+            if (self.nodeTypes) {
+                const nodeName = (self.nodeTypes as any)[t];
+                if (nodeName) {
+                    return `node(${nodeName})`;
+                }
+            }
+
+            return `type(${t})`;
         };
 
         // 用于控制台输出的缩进深度（随解析调用栈增减）
@@ -363,7 +375,6 @@ export const createParser =
         ..._: HasOverlap<Tokens[TypeKey], Nodes[TypeKey]> extends true ? [KeyOverlap] : []
     ) =>
     <RootKey extends Nodes[TypeKey]>(
-        tokenTypes: EnumOf<Tokens[TypeKey]>,
         rootNode: RootKey,
         grammarFactory: (
             grammarBuilder: GrammarBuilderOf<TypeKey, Tokens, Nodes>,
@@ -372,5 +383,14 @@ export const createParser =
             grammar: BaseGrammarItem<TypeKey, Tokens, Nodes>[] & GrammarMeta<TypeKey>;
             customRules: CustomRule<TypeKey, Tokens, Nodes, Nodes[TypeKey]>[];
         },
+        tokenTypes: EnumOf<Tokens[TypeKey]>,
+        nodeTypes?: EnumOf<Nodes[TypeKey]>,
     ): Parser<TypeKey, Tokens, Nodes, RootKey> =>
-        new ParserImpl<TypeKey, Tokens, Nodes, RootKey>(typeKey, tokenTypes, rootNode, debug, grammarFactory);
+        new ParserImpl<TypeKey, Tokens, Nodes, RootKey>(
+            typeKey,
+            tokenTypes,
+            nodeTypes,
+            rootNode,
+            debug,
+            grammarFactory,
+        );

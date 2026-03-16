@@ -110,6 +110,9 @@ class ParserImpl<
     // 用法: grammarMap[target][firstToken]，找到生成target且第一个token为firstToken的所有文法项
     private grammarMap = {} as Record<number, Record<number, GrammarItemInner[]>>;
 
+    // 用法: customFirstGrammarMap[target]，找到生成target且首符号可通过自定义规则（含递归）起始的文法项
+    private customFirstGrammarMap = {} as Record<number, GrammarItemInner[]>;
+
     // 用法: customRuleMap[target]，找到生成target的所有文法项
     private customRuleMap = {} as Record<number, CustomRuleInner[]>;
 
@@ -142,7 +145,6 @@ class ParserImpl<
         const buildResult = grammarFactory(grammarBuilder, customRuleBuilder);
         this.grammar = buildResult.grammar;
         this.customRules = buildResult.customRules;
-        this.calculateFirst();
         for (const rule of this.customRules) {
             if (!this.customRuleMap[rule.target]) {
                 this.customRuleMap[rule.target] = [rule];
@@ -150,6 +152,8 @@ class ParserImpl<
                 this.customRuleMap[rule.target].push(rule);
             }
         }
+        this.calculateFirst();
+        this.calculateCustomFirstGrammarMap();
     }
 
     // 通过builder构建文法已经保证文法不含左递归
@@ -199,6 +203,53 @@ class ParserImpl<
                     this.grammarMap[this.grammar[i].target][value].push(this.grammar[i]);
                 }
             });
+        }
+    }
+
+    // 计算首符号可通过自定义规则（含递归）起始的文法规则索引
+    private calculateCustomFirstGrammarMap() {
+        const tokens = new Set<number>();
+        for (const key in this.tokenTypes) {
+            if (typeof this.tokenTypes[key] == 'number') {
+                tokens.add(this.tokenTypes[key]);
+            }
+        }
+
+        // customStartableNodes: 能以自定义规则为起点完成解析的节点类型
+        const customStartableNodes = new Set<number>();
+        for (const target in this.customRuleMap) {
+            customStartableNodes.add(Number(target));
+        }
+
+        // 迭代求不动点：若 A -> B ... 且 B 可 custom 起始，则 A 也可 custom 起始
+        let changed = true;
+        while (changed) {
+            changed = false;
+            for (const rule of this.grammar) {
+                const first = rule.source[0];
+                if (tokens.has(first)) {
+                    continue;
+                }
+                if (customStartableNodes.has(first) && !customStartableNodes.has(rule.target)) {
+                    customStartableNodes.add(rule.target);
+                    changed = true;
+                }
+            }
+        }
+
+        for (const rule of this.grammar) {
+            const first = rule.source[0];
+            if (tokens.has(first)) {
+                continue;
+            }
+            if (!customStartableNodes.has(first)) {
+                continue;
+            }
+            if (!this.customFirstGrammarMap[rule.target]) {
+                this.customFirstGrammarMap[rule.target] = [rule];
+            } else {
+                this.customFirstGrammarMap[rule.target].push(rule);
+            }
         }
     }
 
@@ -289,11 +340,26 @@ class ParserImpl<
             }
 
             const firstTokenType = (tokenStream[start] as any)[self.typeKey] as number;
-            const candidates = self.grammarMap[target]?.[firstTokenType] ?? [];
+            const tokenCandidates = self.grammarMap[target]?.[firstTokenType] ?? [];
+            const customFirstCandidates = self.customFirstGrammarMap[target] ?? [];
+            const seenRules = new Set<GrammarItemInner>();
+            const candidates: GrammarItemInner[] = [];
+            for (const rule of tokenCandidates) {
+                if (!seenRules.has(rule)) {
+                    seenRules.add(rule);
+                    candidates.push(rule);
+                }
+            }
+            for (const rule of customFirstCandidates) {
+                if (!seenRules.has(rule)) {
+                    seenRules.add(rule);
+                    candidates.push(rule);
+                }
+            }
 
             if (debug) {
                 console.log(
-                    `${indent()}[parseNode] 当前 token=${typeName(firstTokenType)}，找到 ${candidates.length} 条候选规则`,
+                    `${indent()}[parseNode] 当前 token=${typeName(firstTokenType)}，token候选=${tokenCandidates.length}，custom候选=${customFirstCandidates.length}，总候选=${candidates.length}`,
                 );
             }
 

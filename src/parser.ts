@@ -88,6 +88,16 @@ export interface Parser<
     parse(tokenStream: Tokens[]): Extract<ExpandByKey<Nodes, TypeKey>, { [key in TypeKey]: RootKey }>;
 }
 
+export class ParserError extends Error {
+    constructor(
+        message: string,
+        readonly pos: number,
+        options?: ErrorOptions,
+    ) {
+        super(message, options);
+    }
+}
+
 class ParserImpl<
     TypeKey extends string,
     Tokens extends { [key in TypeKey]: number },
@@ -204,6 +214,14 @@ class ParserImpl<
         const self = this;
         const debug = this.debug;
 
+        // 记录所有解析分支中推进到的最远 token 位置，用于失败定位
+        let farthestPos = 0;
+        const markPos = (pos: number) => {
+            if (pos > farthestPos) {
+                farthestPos = pos;
+            }
+        };
+
         // 将类型编号转为可读名称（优先从 tokenTypes 枚举反查）
         const typeName = (t: number): string => {
             const tokenName = (self.tokenTypes as any)[t];
@@ -234,6 +252,7 @@ class ParserImpl<
 
         // 生成器：枚举所有能从 start 位置成功解析 target 节点的结果
         function* parseNode(target: number, start: number): Generator<{ node: any; next: number }> {
+            markPos(start);
             if (debug) {
                 console.log(`${indent()}[parseNode] 尝试解析 ${typeName(target)}，start=${start}`);
             }
@@ -247,6 +266,7 @@ class ParserImpl<
                 try {
                     const result = rule.factory(tokenStream, start);
                     result.node[self.typeKey] = rule.target;
+                    markPos(result.next);
                     if (debug) {
                         console.log(`${indent()}[customRule] 成功，next=${result.next}`);
                     }
@@ -294,6 +314,7 @@ class ParserImpl<
 
             // 递归地逐个匹配 source 中的每个元素，收集 children
             function* step(i: number, pos: number, children: any[]): Generator<{ node: any; next: number }> {
+                markPos(pos);
                 if (i === rule.source.length) {
                     // grammar.ts 中的 factory 已自动为节点设置 typeKey
                     const node = rule.factory(...children);
@@ -352,7 +373,13 @@ class ParserImpl<
             }
         }
 
-        throw new Error('Parse failed: could not parse the entire token stream');
+        const failedToken = tokenStream[farthestPos] as any;
+        const failedTokenInfo =
+            farthestPos < tokenStream.length ? `next=${typeName(failedToken[self.typeKey])}` : 'next=<EOF>';
+        throw new ParserError(
+            `Parse failed at token index ${farthestPos}: could not parse the entire token stream (${failedTokenInfo})`,
+            farthestPos,
+        );
     }
 
     // 仅用于提供Typescript类型支持

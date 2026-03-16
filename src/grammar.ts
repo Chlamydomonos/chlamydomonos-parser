@@ -35,6 +35,8 @@ export type GrammarItem<
     factory: (...children: (Tokens | Nodes)[]) => Nodes;
 };
 
+type UnionOmit<T, K extends keyof any> = T extends any ? Omit<T, K> : never;
+
 type GrammarItemSourceBuilder<
     Grammar extends GrammarItem<TypeKey, Tokens, Nodes, TokenTypes, NodeTypes, NodeTypes, (TokenTypes | NodeTypes)[]>[],
     TypeKey extends string,
@@ -61,7 +63,7 @@ type GrammarItemSourceBuilder<
         // 该factory返回的节点不需要带有typeKey，builder在build过程中会自动为其加入typeKey
         factory: (
             ...children: TypeToValue<TypeKey, TokenTypes | NodeTypes, Tokens | Nodes, SourceTypes>
-        ) => Omit<Extract<Nodes, { [key in TypeKey]: TargetType }>, TypeKey>,
+        ) => UnionOmit<Extract<Nodes, { [key in TypeKey]: TargetType }>, TypeKey>,
     ): GrammarBuilder<
         [...Grammar, GrammarItem<TypeKey, Tokens, Nodes, TokenTypes, NodeTypes, TargetType, SourceTypes>],
         TypeKey,
